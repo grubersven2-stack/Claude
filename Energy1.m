@@ -55,18 +55,7 @@ fprintf('Wall thermal capacity: %.2f MJ/K\n', params.wall_thermal_capacity/1e6);
 fprintf('================================\n\n');
 
 %% Phase Change Model Parameters 
-params.phase_change_method = 'heat_flux';  % Option do add another method
-
-
-
-% For 'heat_flux' method
-params.evap_heat_transfer_coeff = 2000;  % Heat transfer coefficient [W/m²·K]
-                                          % Typical range: 500-5000 for pool boiling
-                                          % Start with 2000, tune if needed
-
 % Cooper Correlation
-
-h_evap = 
 %% Geothermal Parameters 
 params.use_geothermal_profile = true;
 params.geothermal_max_temp = 81.12896;  % °C from your data
@@ -634,9 +623,93 @@ displayUnifiedResults(results, state, params);
 create_vapor_column_plots(results, params);
 
 %% Supporting Functions
-%% 
+%% Cooper Correlation for Nucleate Pool Boiling Heat Transfer Coefficient
+function h_evap = calculateCooperCorrelation(T_sat, P_sat, q_flux, fluid, R_p)
+    % COOPER CORRELATION (1984) - Pool Boiling Heat Transfer Coefficient
+    %
+    % Formula: h = 55 * p_r^(0.12 - 0.4343*ln(R_p)) * (-ln(p_r))^(-0.55) * M^(-0.5) * q^0.67
+    %
+    % INPUTS:
+    %   T_sat   - Saturation temperature [°C]
+    %   P_sat   - Saturation pressure [Pa]
+    %   q_flux  - Heat flux [W/m²]
+    %   fluid   - Fluid name (e.g., 'R717' for ammonia)
+    %   R_p     - Surface roughness [μm] (optional, default = 1.0 for commercial tubes)
+    %
+    % OUTPUTS:
+    %   h_evap  - Evaporation heat transfer coefficient [W/m²·K]
+    %
+    % VALID RANGE:
+    %   - Heat flux: 1,000 - 250,000 W/m² (1-250 kW/m²)
+    %   - Reduced pressure: 0.001 - 0.9
+    %   - Surface roughness: 0.3-1.0 μm (commercial tubes)
+    %
+    % REFERENCE:
+    %   Cooper, M.G. (1984). "Heat Flow Rates in Saturated Nucleate Pool Boiling—
+    %   A Wide-Ranging Examination Using Reduced Properties," 
+    %   Advances in Heat Transfer, Vol. 16, pp. 157-239
+    R_p = 1*10^(-6); %
+    % Get critical properties from CoolProp
+    try
+        P_crit = py.CoolProp.CoolProp.PropsSI('Pcrit', fluid);  % [Pa]
+        M = py.CoolProp.CoolProp.PropsSI('M', fluid);           % [kg/mol]
+        M = double(M) * 1000;  % Convert to [g/mol]
+    catch
+        error('Failed to get critical properties from CoolProp for fluid: %s', fluid);
+    end
+    
+    % Calculate reduced pressure
+    p_r = P_sat / P_crit;
+    
+    % Validate inputs
+    if p_r < 0.001 || p_r > 0.9
+        warning('Reduced pressure (%.4f) outside recommended range [0.001, 0.9]', p_r);
+    end
+    
+    if q_flux < 1000 || q_flux > 250000
+        warning('Heat flux (%.0f W/m²) outside validated range [1,000, 250,000] W/m²', q_flux);
+    end
+    
+    if q_flux <= 0
+        warning('Heat flux is zero or negative, setting h_evap to minimum value');
+        h_evap = 100;  % Minimum reasonable value [W/m²·K]
+        return;
+    end
+    
+    % Cooper Correlation
+    % h = 55 * p_r^(0.12 - 0.4343*ln(R_p)) * (-ln(p_r))^(-0.55) * M^(-0.5) * q^0.67
+    
+    % Calculate each term
+    C = 55;  % Constant for SI units
+    
+    % Pressure term with surface roughness effect
+    pressure_exponent = 0.12 - 0.4343 * log(R_p);
+    pressure_term = p_r^pressure_exponent;
+    
+    % Logarithmic pressure term
+    if p_r > 0.001
+        log_pressure_term = (-log(p_r))^(-0.55);
+    else
+        log_pressure_term = 1;  % Limit for very low pressures
+    end
+    
+    % Molecular weight term
+    molecular_weight_term = M^(-0.5);
+    
+    % Heat flux term
+    heat_flux_term = q_flux^0.67;
+    
+    % Complete Cooper correlation
+    h_evap = C * pressure_term * log_pressure_term * molecular_weight_term * heat_flux_term;
+    
+    % Apply reasonable bounds
+    h_evap = max(100, min(h_evap, 50000));  % Limit to [100, 50000] W/m²·K
+    
+    h_evap = double(h_evap);
+end
+
 function [dmEvap_dt, Q_latent_evap, method_used] = calculatePhaseChangePhysics(state, params, Q_available)
-    %% Calculate evaporation rate from heat transfer physics (NO ENERGY FACTORS!)
+    % Calculate evaporation rate from heat transfer physics (NO ENERGY FACTORS!)
     %
     % INPUTS:
     %   state - Current system state (temperature, pressure, masses, etc.)
@@ -648,11 +721,11 @@ function [dmEvap_dt, Q_latent_evap, method_used] = calculatePhaseChangePhysics(s
     %   Q_latent_evap - Heat consumed by evaporation [W]
     %   method_used - String describing calculation method
     
-    %% Get current thermodynamic state
+    % Get current thermodynamic state
     T_current = state.temperature;  % [°C]
     P_vapor = state.vaporPressure;  % [Pa]
     
-    %% Calculate interface conditions (accounting for vapor column pressure)
+    % Calculate interface conditions (accounting for vapor column pressure)
     vapor_column_height = params.length - state.liquidHeight;
     vaporDensity = py.CoolProp.CoolProp.PropsSI('D', 'P', P_vapor, 'Q', 1, params.fluid);
     P_interface = P_vapor + vaporDensity * 9.81 * vapor_column_height;
@@ -665,19 +738,23 @@ function [dmEvap_dt, Q_latent_evap, method_used] = calculatePhaseChangePhysics(s
     h_vapor = py.CoolProp.CoolProp.PropsSI('H', 'P', P_interface, 'Q', 1, params.fluid);
     hfg = double(h_vapor - h_liquid);
     
-    %% Calculate evaporation rate based on selected method
-    if strcmp(params.phase_change_method, 'heat_flux')
-        %% METHOD 1: Heat Flux Limited (Recommended for start)
+    % Calculate evaporation rate based on selected method
+        % METHOD 1: Heat Flux Limited 
         % Based on Huang et al. (2022) approach
         
         % Maximum possible evaporation if all available heat used
         dmEvap_dt_max = Q_available / hfg;
         
+        % Calculate heat flux based on available energy
+        q_flux = Q_available / params.evap_area;  % [W/m²]
+        
         % Heat transfer limited evaporation
         deltaT_superheat = max(0, T_current - T_interface);  % Driving force
         
+        % COOPER CORRELATION - Calculate h_evap dynamically
+        h_evap = calculateCooperCorrelation(T_current, P_vapor, q_flux, params.fluid, 1.0);
+
         % Nucleate boiling heat flux: q = h * A * ΔT
-        h_evap = params.evap_heat_transfer_coeff;  % [W/m²·K]
         q_evap = h_evap * params.evap_area * deltaT_superheat;
         
         % Mass evaporation from heat flux
@@ -685,13 +762,9 @@ function [dmEvap_dt, Q_latent_evap, method_used] = calculatePhaseChangePhysics(s
         
         % Take minimum (conservative approach)
         dmEvap_dt = min(dmEvap_dt_max, dmEvap_dt_htc);
-        method_used = sprintf('Heat Flux (h=%.0f W/m²K, ΔT=%.2f°C)', h_evap, deltaT_superheat);
         
-    else
-        error('Unknown phase change method: %s', params.phase_change_method);
-    end
     
-    %% Apply safety limits
+    % Apply safety limits
     % Cannot evaporate more than 10% of liquid mass per timestep
     if state.liquidMass > 0
         max_evap_rate = 0.10 * state.liquidMass / params.timeStep;
@@ -701,10 +774,10 @@ function [dmEvap_dt, Q_latent_evap, method_used] = calculatePhaseChangePhysics(s
     % No negative evaporation
     dmEvap_dt = max(dmEvap_dt, 0);
     
-    %% Calculate heat consumed by evaporation
+    % Calculate heat consumed by evaporation
     Q_latent_evap = dmEvap_dt * hfg;
     
-    %% Final check: Cannot consume more heat than available
+    % Final check: Cannot consume more heat than available
     if Q_latent_evap > Q_available
         dmEvap_dt = Q_available / hfg;
         Q_latent_evap = Q_available;
