@@ -419,6 +419,38 @@ end
 
         % When extracting from thermal mass (T > target), Q_excess will be negative
         % This correctly represents cooling of the thermal mass
+
+        %% STEP 2.10: UPDATE TEMPERATURE FROM SENSIBLE HEAT (Q_excess)
+        % CRITICAL FIX: Temperature changes from sensible heat transfer
+        % Q_excess represents net energy to/from thermal mass (NH3 + wall)
+
+        % Get specific heats from CoolProp
+        T_current_K = state.temperature + 273.15;
+
+        % Liquid NH3 specific heat at current temperature
+        cp_liquid = py.CoolProp.CoolProp.PropsSI('C', 'T', T_current_K, 'Q', 0, params.fluid);
+
+        % Vapor NH3 specific heat at current temperature
+        cp_vapor = py.CoolProp.CoolProp.PropsSI('C', 'T', T_current_K, 'Q', 1, params.fluid);
+
+        % Total thermal capacity = m_liquid × cp_liquid + m_vapor × cp_vapor + m_wall × cp_wall
+        C_total = state.liquidMass * cp_liquid + ...
+                  state.totalVaporMass * cp_vapor + ...
+                  params.wall_mass * params.wall_cp_steel;
+
+        % Temperature change from Q_excess
+        % dT = Q_excess × dt / C_total
+        if C_total > 0
+            dT_sensible = (Q_excess * params.timeStep) / C_total;
+
+            % Update temperature directly
+            state.temperature = state.temperature + dT_sensible;
+
+            % Update pressure to match new temperature (saturation condition)
+            state.vaporPressure = py.CoolProp.CoolProp.PropsSI('P', 'T', state.temperature + 273.15, 'Q', 0, params.fluid);
+        else
+            dT_sensible = 0;
+        end
         
     else
         %% PHASE: HEATING MODE (Temperature too low AND heat pump inactive)
@@ -455,9 +487,10 @@ end
     end
     
     %% STEP 5: USE COOPER-BASED EVAPORATION RATE
-    % Evaporation rate already calculated from Cooper correlation (physics-based)
-    % Can be positive (evaporation) or negative (condensation if Q_excess < 0)
-    evapRate = evapRate_physics;  % From calculatePhaseChangePhysics (line ~235)
+    % Evaporation rate calculated from Cooper correlation (physics-based)
+    % This handles LATENT heat (phase change) separately from sensible heat
+    % Temperature already updated from sensible heat (Q_excess) above
+    evapRate = evapRate_physics;  % From calculatePhaseChangePhysics (line ~242)
     massEvaporated = evapRate * params.timeStep;  % Can be positive or negative
     
     %% STEP 6: EQUILIBRIUM CHECK
@@ -505,9 +538,14 @@ end
         state.liquidHeight = 0;
     end
     
-    %% STEP 8: ENFORCE THERMODYNAMIC EQUILIBRIUM WITH IMPROVED SOLVER (FIXED!)
+    %% STEP 8: ADJUST PRESSURE FOR PHASE CHANGE (MASS BALANCE)
+    % Temperature was already updated from sensible heat
+    % Now adjust pressure based on vapor mass changes from evaporation
     vaporVolume = params.systemVolume - state.liquidHeight * params.crossSectionArea;
     [T_final, P_final] = solve_mass_balance_improved(state.totalVaporMass, vaporVolume, state.temperature, params.fluid);
+
+    % Update temperature and pressure from phase change equilibrium
+    % This fine-tunes the temperature/pressure relationship
     state.temperature = T_final;
     state.vaporPressure = P_final;
     
@@ -621,8 +659,11 @@ end
         
         fprintf('  THERMAL MASS:\n');
         fprintf('    Q_excess: %.1f kW [%s]\n', Q_excess/1000, thermal_mass_status);
+        if exist('dT_sensible', 'var')
+            fprintf('    dT from sensible heat: %.4f°C/step\n', dT_sensible);
+        end
         fprintf('    Evaporation rate: %.1f g/s (+ = evap, - = condensation)\n', evapRate*1000);
-        fprintf('    Temperature change: %.3f°C/step\n', state.temperature - prev_temperature);
+        fprintf('    Temperature change (total): %.3f°C/step\n', state.temperature - prev_temperature);
         fprintf('  \n');
         
         fprintf('  ENERGY BALANCE VERIFICATION:\n');
