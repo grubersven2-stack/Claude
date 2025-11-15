@@ -1,0 +1,46 @@
+=== Step 5758: Sequential Energy Cascade ===
+  Temperature: 81.9°C (target: 60.0°C)
+  Operating Phase: NH3 CIRCULATION (T≥60.0°C OR HP active)
+  
+  ENERGY CASCADE:
+    Q_geothermal (at 81.9°C actual): 0.0 kW
+    Q_losses: 61.5 kW
+    Q_input_net: -61.5 kW
+  
+  NH3 CIRCULATION ANALYSIS:
+    NH3 flow actual: 100.000 kg/s (min: 0.010, max: 100.000)
+    Energy per kg NH3: 1142.0 kJ/kg
+    Q_NH3_circulation: 114202.3 kW
+    NH3 constraint: MAX_FLOW
+  
+  HEAT PUMP ANALYSIS:
+    Status: ACTIVE (81.9°C > 55.0°C stop)
+    Demand: 39.9 kW, Delivered: 39.9 kW
+    Load: 100% of rated capacity
+  
+  WATER PREHEATING:
+    Q_water_preheat: 114162.4 kW
+  
+  THERMAL MASS:
+    Q_excess: -114263.8 kW [COOLING]
+    dT from sensible heat: -59.5842°C/step
+    Evaporation rate: 0.0 g/s (+ = evap, - = condensation)
+    Temperature change (total): 0.416°C/step
+  
+  ENERGY BALANCE VERIFICATION:
+    Total output: 0.0 kW
+    Balance error: 0.000 kW
+    ✅ Energy balance OK
+  
+  SYSTEM STATUS: TRANSIENT
+  ⚠️  FLOW CONSTRAINT: MAX_FLOW
+=============================================
+Warning: Heat flux (0 W/m²) outside validated range [1,000, 250,000] W/m² 
+> In Energy1_FIXED2_working_preheat_stabilna_temperatura>calculateCooperCorrelation (line 756)
+In Energy1_FIXED2_working_preheat_stabilna_temperatura>calculatePhaseChangePhysics (line 844)
+In Energy1_FIXED2_working_preheat_stabilna_temperatura (line 246) 
+Warning: Heat flux is zero or negative, setting h_evap to minimum value 
+> In Energy1_FIXED2_working_preheat_stabilna_temperatura>calculateCooperCorrelation (line 760)
+In Energy1_FIXED2_working_preheat_stabilna_temperatura>calculatePhaseChangePhysics (line 844)
+In Energy1_FIXED2_working_preheat_stabilna_temperatura (line 246) 
+Warning: Mass balance solver did not converge after 30 iterations
