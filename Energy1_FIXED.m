@@ -542,16 +542,25 @@ end
         state.liquidHeight = 0;
     end
     
-    %% STEP 8: ADJUST PRESSURE FOR PHASE CHANGE (MASS BALANCE)
-    % Temperature was already updated from sensible heat
-    % Now adjust pressure based on vapor mass changes from evaporation
-    vaporVolume = params.systemVolume - state.liquidHeight * params.crossSectionArea;
-    [T_final, P_final] = solve_mass_balance_improved(state.totalVaporMass, vaporVolume, state.temperature, params.fluid);
+    %% STEP 8: UPDATE PRESSURE TO MATCH TEMPERATURE
+    % Temperature was already updated from sensible heat (Q_excess) in STEP 2.10
+    % Now update pressure to match the new temperature (saturation condition)
+    % DO NOT recalculate temperature from vapor mass - it ignores sensible heat!
 
-    % Update temperature and pressure from phase change equilibrium
-    % This fine-tunes the temperature/pressure relationship
-    state.temperature = T_final;
-    state.vaporPressure = P_final;
+    % Update pressure based on saturation at current temperature
+    state.vaporPressure = py.CoolProp.CoolProp.PropsSI('P', 'T', state.temperature + 273.15, 'Q', 0, params.fluid);
+
+    % Optional: Fine-tune with mass balance if evaporation is significant
+    % Only use this if evapRate is large (> 0.01 kg/s)
+    if abs(evapRate) > 0.01
+        vaporVolume = params.systemVolume - state.liquidHeight * params.crossSectionArea;
+        [T_final, P_final] = solve_mass_balance_improved(state.totalVaporMass, vaporVolume, state.temperature, params.fluid);
+
+        % Use average of sensible heat temp and mass balance temp
+        % This accounts for both sensible heat and phase change effects
+        state.temperature = 0.9 * state.temperature + 0.1 * T_final;  % Weighted toward sensible
+        state.vaporPressure = P_final;
+    end
     
     %% Calculate remaining outputs
     hydroPressure = liquidDensity * 9.81 * state.liquidHeight;
