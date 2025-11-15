@@ -233,10 +233,14 @@ end
     % Use actual NH3 temperature for correct physics - no artificial reference
     % System will naturally find equilibrium through negative feedback
 
-    % Calculate geothermal heat input at actual pipe temperature
-    [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(state, params, state.temperature);
+    % CRITICAL FIX: Calculate geothermal input using WALL temperature, not NH3 temperature
+    % Wall is the interface with ground, and wall is hotter than NH3 by T_wall_offset
+    T_wall = state.temperature + params.T_wall_offset;
 
-    % Calculate heat losses
+    % Calculate geothermal heat input at actual WALL temperature
+    [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(state, params, T_wall);
+
+    % Calculate heat losses (still uses NH3 temperature)
     Q_losses = params.heat_loss_coefficient * params.surface_area_loss * (state.temperature - params.T_ambient);
 
     % Net energy available for NH3 circulation (physics-based, no energy factor)
@@ -622,7 +626,8 @@ end
         fprintf('  \n');
 
         fprintf('  ENERGY CASCADE:\n');
-        fprintf('    Q_geothermal (at %.1f°C actual): %.1f kW\n', state.temperature, Q_geothermal_total/1000);
+        fprintf('    T_wall (estimated): %.1f°C\n', T_wall);
+        fprintf('    Q_geothermal (at %.1f°C wall): %.1f kW\n', T_wall, Q_geothermal_total/1000);
         fprintf('    Q_losses: %.1f kW\n', Q_losses/1000);
         fprintf('    Q_input_net: %.1f kW\n', Q_input_net/1000);
         fprintf('  \n');
