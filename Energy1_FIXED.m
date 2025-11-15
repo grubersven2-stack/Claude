@@ -302,28 +302,39 @@ end
 %% CORRECTED: NH3 FLOW LOGIC WITH THERMAL MASS EXTRACTION
 
 %% STEP 2.4: CALCULATE NH3 FLOW
-% KEY FIX: If T > T_target, extract from thermal mass even if Q_input_net < 0
-% The stored thermal energy at high temperature is available for extraction
+% KEY FIX: NH3 flow based on AVAILABLE ENERGY, not just heat pump demand
+% This allows using excess energy for water preheating
 
 if state.temperature > params.T_equilibrium_target
     % THERMAL MASS EXTRACTION MODE
     % System is too hot - extract heat from stored thermal mass to cool down
-    % NH3 flow determined by heat pump demand, NOT limited by geothermal input
+    extraction_mode = 'THERMAL_MASS';
 
-    if state.heat_pump_active && energy_per_kg_NH3 > 0
-        % Calculate flow needed to satisfy heat pump
-        NH3_flow_from_demand = Q_heat_pump_demand / energy_per_kg_NH3;
-        NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_from_demand, params.max_NH3_flow));
-        extraction_mode = 'THERMAL_MASS';
+    % Calculate maximum flow from available energy (includes HP + preheating)
+    if energy_per_kg_NH3 > 0
+        % Use ALL available energy (not just heat pump demand)
+        % This allows preheating to use excess energy
+        NH3_flow_from_energy = max(0, Q_input_net) / energy_per_kg_NH3;
+
+        % Also calculate minimum flow needed for heat pump
+        if state.heat_pump_active
+            NH3_flow_min_for_HP = Q_heat_pump_demand / energy_per_kg_NH3;
+        else
+            NH3_flow_min_for_HP = 0;
+        end
+
+        % Use the larger of: minimum for HP, or available from energy
+        NH3_flow_actual = max(NH3_flow_min_for_HP, NH3_flow_from_energy);
+
+        % Apply flow constraints
+        NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_actual, params.max_NH3_flow));
     else
-        % Heat pump off but still above target - maintain minimum circulation
         NH3_flow_actual = params.min_NH3_flow;
-        extraction_mode = 'THERMAL_MASS_MIN';
     end
 
 else
     % NORMAL MODE
-    % T < T_target: NH3 flow limited by available geothermal energy
+    % T ≤ T_target: NH3 flow limited by available geothermal energy
     extraction_mode = 'GEOTHERMAL';
 
     if Q_input_net > 0 && energy_per_kg_NH3 > 0
