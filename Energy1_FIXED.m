@@ -299,20 +299,43 @@ end
             HP_load_percent = 0;
         end
         
-%% CORRECTED: ENERGY-DRIVEN NH3 FLOW LOGIC
+%% CORRECTED: NH3 FLOW LOGIC WITH THERMAL MASS EXTRACTION
 
-%% STEP 2.4: CALCULATE MAXIMUM POSSIBLE NH3 FLOW FROM AVAILABLE ENERGY
-% NH3 flow should be limited by available energy, not heat pump demand
-Q_net_available = Q_input_net;  % Total energy available for NH3 circulation
+%% STEP 2.4: CALCULATE NH3 FLOW
+% KEY FIX: If T > T_target, extract from thermal mass even if Q_input_net < 0
+% The stored thermal energy at high temperature is available for extraction
 
-if Q_net_available > 0 && energy_per_kg_NH3 > 0
-    NH3_flow_from_energy = Q_net_available / energy_per_kg_NH3;
+if state.temperature > params.T_equilibrium_target
+    % THERMAL MASS EXTRACTION MODE
+    % System is too hot - extract heat from stored thermal mass to cool down
+    % NH3 flow determined by heat pump demand, NOT limited by geothermal input
+
+    if state.heat_pump_active && energy_per_kg_NH3 > 0
+        % Calculate flow needed to satisfy heat pump
+        NH3_flow_from_demand = Q_heat_pump_demand / energy_per_kg_NH3;
+        NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_from_demand, params.max_NH3_flow));
+        extraction_mode = 'THERMAL_MASS';
+    else
+        % Heat pump off but still above target - maintain minimum circulation
+        NH3_flow_actual = params.min_NH3_flow;
+        extraction_mode = 'THERMAL_MASS_MIN';
+    end
+
 else
-    NH3_flow_from_energy = 0;
+    % NORMAL MODE
+    % T < T_target: NH3 flow limited by available geothermal energy
+    extraction_mode = 'GEOTHERMAL';
+
+    if Q_input_net > 0 && energy_per_kg_NH3 > 0
+        NH3_flow_from_energy = Q_input_net / energy_per_kg_NH3;
+    else
+        NH3_flow_from_energy = 0;
+    end
+
+    NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_from_energy, params.max_NH3_flow));
 end
 
-%% STEP 2.5: APPLY FLOW CONSTRAINTS
-NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_from_energy, params.max_NH3_flow));
+%% STEP 2.5: (Flow constraints already applied above)
 
 %% STEP 2.6: CHECK FOR FLOW CONSTRAINTS
 if NH3_flow_actual >= params.max_NH3_flow * 0.999
@@ -360,26 +383,30 @@ end
 
 %% Debug output
 if mod(step, 200) == 0
-    fprintf('\n=== ENERGY-DRIVEN NH3 LOGIC ===\n');
-    fprintf('  Q_net_available: %.1f kW\n', Q_net_available/1000);
-    fprintf('  NH3_flow_from_energy: %.3f kg/s\n', NH3_flow_from_energy);
+    fprintf('\n=== NH3 FLOW LOGIC ===\n');
+    fprintf('  Extraction mode: %s\n', extraction_mode);
+    fprintf('  Q_input_net: %.1f kW\n', Q_input_net/1000);
     fprintf('  NH3_flow_actual: %.3f kg/s (%.1f%% of max)\n', ...
             NH3_flow_actual, 100*NH3_flow_actual/params.max_NH3_flow);
     fprintf('  Q_NH3_circulation: %.1f kW\n', Q_NH3_circulation/1000);
     fprintf('  Q_heat_pump_delivered: %.1f kW\n', Q_heat_pump_delivered/1000);
     fprintf('  Q_water_preheat: %.1f kW\n', Q_water_preheat/1000);
-    fprintf('  Energy check: %.3f kW difference\n', (Q_NH3_circulation - NH3_energy_check)/1000);
-    fprintf('===============================\n');
+    if strcmp(extraction_mode, 'THERMAL_MASS')
+        fprintf('  ⚡ Extracting from thermal mass (T=%.1f > %.1f°C)\n', ...
+                state.temperature, params.T_equilibrium_target);
+    end
+    fprintf('======================\n');
 end
         
         %% STEP 2.9: FINAL EXCESS ENERGY (CAN BE NEGATIVE!)
-        % FIXED: Q_excess can be negative when heat pump demand > available energy
+        % Q_excess = Energy going to/from thermal mass
+        % Positive: Heating up (geothermal > extraction)
+        % Negative: Cooling down (extraction > geothermal)
+
         Q_excess = Q_input_net - Q_NH3_circulation;
-        
-        % If heat pump is active and demanding more than circulation energy, Q_excess becomes negative
-        if state.heat_pump_active && Q_heat_pump_delivered > Q_NH3_circulation
-            Q_excess = Q_excess - (Q_heat_pump_delivered - Q_NH3_circulation);
-        end
+
+        % When extracting from thermal mass (T > target), Q_excess will be negative
+        % This correctly represents cooling of the thermal mass
         
     else
         %% PHASE: HEATING MODE (Temperature too low AND heat pump inactive)
