@@ -60,8 +60,8 @@ params.T_wall_offset = 5;  % [°C] PLACEHOLDER: Wall is ~5°C hotter than interf
                            % Smaller offset to avoid overestimating heat transfer
                            % TODO: In next step, replace with thermal mass calculation for exact T_wall
 
-% Reference temperature for geothermal input calculation
-params.T_reference_geothermal = 60;  % [°C] Use target temp to avoid circular logic
+% Note: Geothermal input uses ACTUAL temperature for correct physics
+% No reference temperature needed - system finds natural equilibrium
 
 %% Geothermal Parameters 
 params.use_geothermal_profile = true;
@@ -229,57 +229,21 @@ if mod(step, 200) == 0
             T_interface, P_interface/1000, T_interface-state.temperature);
 end
 
-    %% STEP 1: CALCULATE AVAILABLE GEOTHERMAL HEAT (REFERENCE TEMPERATURE)
-    % FIXED: Use reference temperature to avoid circular logic
-    % Problem: Using state.temperature causes Q_geo → 0 when NH3 gets hot
-    % Solution: Use target temperature as reference for available geothermal heat
+    %% STEP 1: CALCULATE GEOTHERMAL HEAT AT ACTUAL TEMPERATURE
+    % Use actual NH3 temperature for correct physics - no artificial reference
+    % System will naturally find equilibrium through negative feedback
 
-    % Calculate geothermal heat AVAILABLE at reference conditions
-    [Q_geothermal_available, Q_profile_debug] = calculate_geothermal_input(state, params, params.T_reference_geothermal);
+    % Calculate geothermal heat input at actual pipe temperature
+    [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(state, params, state.temperature);
 
-    % Calculate heat losses (still uses actual temperature)
+    % Calculate heat losses
     Q_losses = params.heat_loss_coefficient * params.surface_area_loss * (state.temperature - params.T_ambient);
 
-    %% STEP 1.5: DYNAMIC ENERGY FACTOR FROM COOPER CORRELATION
-    % Cooper calculates LATENT heat transfer (boiling)
-    % Sensible heat needed separately to heat NH3 from 20°C → T_sat
+    % Net energy available for NH3 circulation (physics-based, no energy factor)
+    Q_input_net = Q_geothermal_total - Q_losses;
 
-    % Calculate Cooper-based latent heat transfer
-    [evapRate_physics, Q_latent_Cooper] = calculatePhaseChangePhysics(state, params, Q_geothermal_available);
-
-    % Calculate sensible heat requirement for NH3 circulation
-    if state.temperature >= params.T_equilibrium_target || state.heat_pump_active
-        % Get NH3 properties
-        T_current_K = state.temperature + 273.15;
-        T_return_K = params.T_return_target + 273.15;
-        h_liquid_current = py.CoolProp.CoolProp.PropsSI('H', 'T', T_current_K, 'Q', 0, params.fluid);
-        h_liquid_return = py.CoolProp.CoolProp.PropsSI('H', 'T', T_return_K, 'Q', 0, params.fluid);
-        sensible_heat_per_kg = h_liquid_current - h_liquid_return;  % J/kg to reheat NH3
-
-        % Estimate sensible heat requirement (based on expected NH3 flow)
-        % Use minimum flow as baseline
-        Q_sensible_baseline = params.min_NH3_flow * sensible_heat_per_kg;
-    else
-        Q_sensible_baseline = 0;
-        sensible_heat_per_kg = 0;
-    end
-
-    % DYNAMIC ENERGY FACTOR: What fraction of available geothermal goes to useful heat?
-    % Total useful heat = Sensible (reheat) + Latent (boiling, from Cooper)
-    Q_useful_heat = Q_sensible_baseline + Q_latent_Cooper;
-
-    % Energy factor for this timestep
-    if Q_geothermal_available > 0
-        current_energy_factor = min(1.0, Q_useful_heat / Q_geothermal_available);
-    else
-        current_energy_factor = 0;
-    end
-
-    % Total heat transferred to NH3
-    Q_transfer_actual = Q_useful_heat;
-
-    % Net energy available for NH3 circulation
-    Q_input_net = Q_transfer_actual - Q_losses;
+    % Calculate evaporation rate from Cooper correlation (for thermal mass only)
+    [evapRate_physics, ~] = calculatePhaseChangePhysics(state, params, Q_geothermal_total);
     
     %% STEP 2: SEQUENTIAL ENERGY CASCADE (NO CIRCULAR DEPENDENCY)
     % FIXED: Modified logic to allow heat pump to cool below equilibrium target
@@ -434,7 +398,7 @@ end
     
     %% STEP 3: EXACT ENERGY BALANCE VERIFICATION (INCLUDES HEAT PUMP)
     Q_total_output = Q_losses + Q_NH3_circulation + Q_excess;
-    Q_total_input = Q_geothermal_available * current_energy_factor;
+    Q_total_input = Q_geothermal_total;
     energy_balance_error = Q_total_input - Q_total_output;
     
     % Check energy balance closure
@@ -523,9 +487,9 @@ end
     results.vaporDensity(step + 1) = double(vaporDensity);
     results.hfg(step + 1) = double(hfg) / 1000;
     results.liquidMass(step + 1) = state.liquidMass;
-    results.energyFactor(step + 1) = current_energy_factor;
+    results.energyFactor(step + 1) = 1.0;  % No energy factor - direct physics
     results.Q_input_effective(step + 1) = Q_input_net / 1000;
-    results.Q_input_total_EF(step + 1) = (Q_geothermal_available * current_energy_factor) / 1000;
+    results.Q_input_total_EF(step + 1) = Q_geothermal_total / 1000;
     results.Q_heat_pump(step + 1) = Q_heat_pump_delivered / 1000;
     results.Q_water_preheat(step + 1) = Q_water_preheat / 1000;
     results.Q_losses(step + 1) = Q_losses / 1000;
@@ -578,17 +542,12 @@ end
         else
             fprintf('  Operating Phase: THERMAL HEATING (T<%.1f°C AND HP inactive)\n', params.T_equilibrium_target);
         end        
-        fprintf('  Energy Factor: %.1f%%\n', current_energy_factor*100);
         fprintf('  \n');
-        
+
         fprintf('  ENERGY CASCADE:\n');
-        fprintf('    Q_geothermal_available (at %.0f°C ref): %.1f kW\n', params.T_reference_geothermal, Q_geothermal_available/1000);
-        fprintf('    Q_latent_Cooper: %.1f kW\n', Q_latent_Cooper/1000);
-        fprintf('    Q_sensible_baseline: %.1f kW\n', Q_sensible_baseline/1000);
-        fprintf('    Q_useful_heat (sensible+latent): %.1f kW\n', Q_useful_heat/1000);
+        fprintf('    Q_geothermal (at %.1f°C actual): %.1f kW\n', state.temperature, Q_geothermal_total/1000);
         fprintf('    Q_losses: %.1f kW\n', Q_losses/1000);
         fprintf('    Q_input_net: %.1f kW\n', Q_input_net/1000);
-        fprintf('    Energy factor (dynamic): %.1f%%\n', current_energy_factor*100);
         fprintf('  \n');
         
         if state.temperature >= params.T_equilibrium_target
@@ -910,12 +869,11 @@ function T_ground = geothermal_temperature(depth, params)
 end
 
 %% Calculate depth-dependent heat input
-function [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(state, params, T_reference)
+function [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(state, params, T_pipe)
     % INPUTS:
     %   state - Current system state
     %   params - System parameters
-    %   T_reference - Reference temperature for calculation [°C]
-    %                 Use target temp to avoid circular logic with actual temp
+    %   T_pipe - Actual pipe temperature for calculation [°C]
 
     if ~params.use_geothermal_profile
         % Fallback to original constant heat input
@@ -937,9 +895,8 @@ function [Q_geothermal_total, Q_profile_debug] = calculate_geothermal_input(stat
         % Ground temperature at this depth
         T_ground = geothermal_temperature(depth_mid, params);
 
-        % FIXED: Use reference temperature instead of state.temperature
-        % This prevents circular logic where high NH3 temp kills geothermal input
-        T_pipe = T_reference;
+        % Use actual pipe temperature (passed as argument)
+        % When NH3 is hot, geothermal input naturally decreases (correct physics)
 
         % Heat transfer area for this segment
         segment_area = pi * params.diameter_out * segment_length;
