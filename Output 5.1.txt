@@ -1,0 +1,43 @@
+=== Step 800: Sequential Energy Cascade ===
+  Temperature: 72.6°C (target: 60.0°C)
+  Operating Phase: NH3 CIRCULATION (T≥60.0°C OR HP active)
+  
+  ENERGY CASCADE:
+    T_wall (estimated): 83.7°C
+    Q_geothermal (at 83.7°C wall): 0.0 kW
+    Q_losses: 58.7 kW
+    Q_input_net: -58.7 kW
+  
+  NH3 CIRCULATION ANALYSIS:
+    NH3 flow actual: 10.000 kg/s (min: 0.010, max: 10.000)
+    Energy per kg NH3: 1147.2 kJ/kg
+    Q_NH3_circulation: 11472.5 kW
+    NH3 constraint: MAX_FLOW
+  
+  HEAT PUMP ANALYSIS:
+    Status: ACTIVE (72.6°C > 55.0°C stop)
+    Demand: 63.0 kW, Delivered: 63.0 kW
+    Load: 100% of rated capacity
+  
+  WATER PREHEATING:
+    Q_water_preheat: 11409.5 kW
+  
+  THERMAL MASS:
+    Q_excess: -11531.2 kW [COOLING]
+    dT from sensible heat: -6.0888°C/step
+    Evaporation rate: 0.0 g/s (+ = evap, - = condensation)
+    Temperature change (total): 5.611°C/step
+  
+  ENERGY BALANCE VERIFICATION:
+    Total output: 0.0 kW
+    Balance error: 0.000 kW
+    ✅ Energy balance OK
+  
+  SYSTEM STATUS: TRANSIENT
+  ⚠️  FLOW CONSTRAINT: MAX_FLOW
+=============================================
+Warning: Heat flux (62 W/m²) outside validated range [1,000, 250,000] W/m² 
+> In Energy1_FIXED>calculateCooperCorrelation (line 770)
+In Energy1_FIXED>calculatePhaseChangePhysics (line 858)
+In Energy1_FIXED (line 250) 
+Warning: Mass balance solver did not converge after 30 iterations
