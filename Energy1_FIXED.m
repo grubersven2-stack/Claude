@@ -307,27 +307,28 @@ end
 
 if state.temperature > params.T_equilibrium_target
     % THERMAL MASS EXTRACTION MODE
-    % System is too hot - extract heat from stored thermal mass to cool down
+    % System is too hot - actively cool down by extracting maximum heat
+    % Temperature is ALLOWED to drop - extract as much as possible!
     extraction_mode = 'THERMAL_MASS';
 
-    % Calculate maximum flow from available energy (includes HP + preheating)
     if energy_per_kg_NH3 > 0
-        % Use ALL available energy (not just heat pump demand)
-        % This allows preheating to use excess energy
-        NH3_flow_from_energy = max(0, Q_input_net) / energy_per_kg_NH3;
+        % KEY FIX: Use MAXIMUM NH3 flow to cool down system
+        % Don't limit by Q_input_net - extract from thermal mass!
+        % This maximizes preheating and cools system toward target
 
-        % Also calculate minimum flow needed for heat pump
+        % Calculate minimum flow needed for heat pump
         if state.heat_pump_active
             NH3_flow_min_for_HP = Q_heat_pump_demand / energy_per_kg_NH3;
         else
-            NH3_flow_min_for_HP = 0;
+            NH3_flow_min_for_HP = params.min_NH3_flow;
         end
 
-        % Use the larger of: minimum for HP, or available from energy
-        NH3_flow_actual = max(NH3_flow_min_for_HP, NH3_flow_from_energy);
+        % When T > target, use maximum flow to cool down
+        % Temperature drop is DESIRED - extract maximum heat for preheating
+        NH3_flow_actual = params.max_NH3_flow;
 
-        % Apply flow constraints
-        NH3_flow_actual = max(params.min_NH3_flow, min(NH3_flow_actual, params.max_NH3_flow));
+        % But ensure heat pump minimum is met
+        NH3_flow_actual = max(NH3_flow_min_for_HP, NH3_flow_actual);
     else
         NH3_flow_actual = params.min_NH3_flow;
     end
